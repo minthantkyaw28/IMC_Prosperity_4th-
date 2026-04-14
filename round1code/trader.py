@@ -71,14 +71,19 @@ class Trader:
                     mid = (best_bid + best_ask) / 2.0
 
                 half_spread = 8
-                skew = position   # positive position → shift quotes down; negative → up
+                # k=0: no inventory skew. Backtests show removing skew increases fills
+                # and PnL on all 3 historical days. Osmium is mean-reverting so residual
+                # position marks to mid cleanly at end of day — skew only hurts us by
+                # pulling quotes away from the market after large fills.
+                our_bid = math.floor(mid - half_spread)
+                our_ask = math.ceil(mid  + half_spread)
 
-                our_bid = math.floor(mid - half_spread - skew)
-                our_ask = math.ceil(mid  + half_spread - skew)
-
-                # Quote the full available capacity on each side
-                bid_capacity = limit - position      # max additional units we can buy
-                ask_capacity = limit + position      # max units we can sell (flatten + short)
+                # Quote size 10: backtest optimum (hs=8, qs=10, k=0).
+                # Caps at 10 per side to avoid exhausting capacity in one fill,
+                # keeping both sides active throughout the session.
+                quote_size = 10
+                bid_capacity = min(quote_size, limit - position)
+                ask_capacity = min(quote_size, limit + position)
 
                 if bid_capacity > 0:
                     orders.append(Order(product, our_bid,  bid_capacity))
