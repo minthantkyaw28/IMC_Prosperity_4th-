@@ -78,13 +78,13 @@ class Trader:
                 # k=0 gave pos=+12 stranded at end (116 XIRECs of unbooked edge).
                 # k=1 gave pos=+2 but killed fill frequency (only 32 real fills vs 187).
                 # k=0.5 keeps high fill activity AND unwinds inventory before session ends.
-                skew = position * 0.5
+                skew = position * 0.45
                 our_bid = math.floor(mid - half_spread - skew)
                 our_ask = math.ceil(mid  + half_spread - skew)
 
                 # Quote size 10: large enough to capture meaningful volume per fill,
                 # small enough that a single fill doesn't exhaust the position limit.
-                quote_size = 12
+                quote_size = 10
                 bid_capacity = min(quote_size, limit - position)
                 ask_capacity = min(quote_size, limit + position)
 
