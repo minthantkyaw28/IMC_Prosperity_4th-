@@ -1,132 +1,90 @@
-import jsonpickle
 import math
-from typing import Dict, List
-from datamodel import OrderDepth, UserId, TradingState, Order
+from typing import List
+from datamodel import OrderDepth, TradingState, Order
 
 # =========================================================
-# GLOBALS & CONSTANTS
+# POSITION LIMITS — confirm against portal before submitting
 # =========================================================
-
-# IMPORTANT: Confirm these position limits against the portal.
-# These dictate our maximum allowed inventory at any time.
 POSITION_LIMITS = {
     'ASH_COATED_OSMIUM': 20,
-    'INTARIAN_PEPPER_ROOT': 20
+    'INTARIAN_PEPPER_ROOT': 20,
 }
 
 class Trader:
 
-    def __init__(self):
-        # We define constants for the EMA (Exponential Moving Average) smoothing
-        # Slowed down significantly to capture macro-trends and avoid 100ms interval noise
-        self.SHORT_EMA_ALPHA = 2 / (1000 + 1)   # roughly a 1000-period EMA (~100 sec)
-        self.LONG_EMA_ALPHA  = 2 / (5000 + 1)  # roughly a 5000-period EMA (~500 sec)
-
     def run(self, state: TradingState):
-        """
-        Takes the current TradingState and returns:
-        1. A dict mapping product symbols to a list of Orders
-        2. An integer indicating conversion counts (not heavily used in Round 1)
-        3. A String representation of the trader state (persisted across iterations)
-        """
         result = {}
         conversions = 0
-        
-        # 1. Deserialize our persistent state
-        # We track our EMAs for Pepper Root here.
-        trader_state = {
-            "pepper_short_ema": None,
-            "pepper_long_ema": None
-        }
-        
-        if state.traderData:
-            try:
-                trader_state = jsonpickle.decode(state.traderData)
-            except Exception as e:
-                # Fallback to defaults if deserialization fails
-                pass
+        traderData = ""
 
-        # 2. Iterate through the order books of the products
-        for product in state.order_depths:
-            order_depth: OrderDepth = state.order_depths[product]
+        for product, order_depth in state.order_depths.items():
             orders: List[Order] = []
-            
-            # Determine best bids and asks safely
-            best_bid = max(order_depth.buy_orders.keys()) if len(order_depth.buy_orders) > 0 else None
-            best_ask = min(order_depth.sell_orders.keys()) if len(order_depth.sell_orders) > 0 else None
-            
-            if best_bid is None or best_ask is None:
-                continue # Skip if orderbook is empty on one side
-
-            mid_price = (best_bid + best_ask) / 2.0
-            current_position = state.position.get(product, 0)
+            position = state.position.get(product, 0)
             limit = POSITION_LIMITS.get(product, 20)
 
-            # =========================================================
-            # STRATEGY 1: ASH_COATED_OSMIUM (Market Making)
-            # =========================================================
-            if product == 'ASH_COATED_OSMIUM':
-                # Based on our EDA, the median spread is 16. 
-                # We want to capture 8 credits on the bid and 8 credits on the ask.
-                base_half_spread = 8
-                
-                # We skew our prices based on our inventory to prevent adverse selection
-                # Example: If we hold +5 inventory, our bid drops by 5, and our ask drops by 5
-                # This makes us less likely to buy more, and more likely to sell our stock.
-                skew = current_position  # Linear skew
-                
-                our_bid = math.floor(mid_price - base_half_spread - skew)
-                our_ask = math.ceil(mid_price + base_half_spread - skew)
+            buy_orders  = order_depth.buy_orders   # {price: volume}  volume > 0
+            sell_orders = order_depth.sell_orders  # {price: volume}  volume < 0 (negative)
 
-                # Determine sizes (quoting 5 is safe based on EDA median execution size)
-                bid_size = min(5, limit - current_position)
-                ask_size = max(-5, -limit - current_position)
+            best_bid = max(buy_orders)  if buy_orders  else None
+            best_ask = min(sell_orders) if sell_orders else None
 
-                if bid_size > 0:
-                    orders.append(Order(product, our_bid, bid_size))
-                if ask_size < 0:
-                    orders.append(Order(product, our_ask, ask_size))
-                    
+            # =====================================================
+            # INTARIAN_PEPPER_ROOT — Aggressive trend entry
+            # =====================================================
+            # EDA finding: price rises ~1,000 pts every single day (+10%).
+            # Best strategy: get to max long (+20) immediately at t=0 by
+            # sweeping ALL ask levels. Holding costs nothing; the trend does work.
+            # Theoretical PnL on day 0: ~19,850 XIRECs.
+            # =====================================================
+            if product == 'INTARIAN_PEPPER_ROOT':
+                need = limit - position
+                if need > 0 and sell_orders:
+                    # Sweep ask levels 1→2→3 until we fill all 'need' units.
+                    # Place one order priced above the deepest ask so the engine
+                    # fills us through all available levels in one shot.
+                    ask_prices = sorted(sell_orders.keys())   # ascending
+                    deepest_ask = ask_prices[-1]              # worst level we'll pay
+                    orders.append(Order(product, deepest_ask, need))
+
                 result[product] = orders
 
-            # =========================================================
-            # STRATEGY 2: INTARIAN_PEPPER_ROOT (EMA Trend Following)
-            # =========================================================
-            elif product == 'INTARIAN_PEPPER_ROOT':
-                
-                # Initialize EMAs if they are None (first iteration)
-                if trader_state["pepper_short_ema"] is None:
-                    trader_state["pepper_short_ema"] = mid_price
-                    trader_state["pepper_long_ema"] = mid_price
+            # =====================================================
+            # ASH_COATED_OSMIUM — Market Making
+            # =====================================================
+            # EDA finding: price is perfectly mean-reverting around ~10,000.
+            # Market spread is consistently 16 pts. We quote at half_spread=8
+            # (inside the market) to attract fills while keeping strong edge.
+            # Wider spreads earn more per fill; backtests show hs=8 > hs=5 > hs=3.
+            # Inventory skew shifts both quotes proportionally to our position,
+            # reducing the chance of building a one-sided book.
+            # =====================================================
+            elif product == 'ASH_COATED_OSMIUM':
+                if best_bid is None and best_ask is None:
+                    result[product] = orders
+                    continue
+
+                if best_bid is None:
+                    mid = best_ask
+                elif best_ask is None:
+                    mid = best_bid
                 else:
-                    # Update EMAs
-                    prev_short = trader_state["pepper_short_ema"]
-                    prev_long = trader_state["pepper_long_ema"]
-                    
-                    trader_state["pepper_short_ema"] = (mid_price * self.SHORT_EMA_ALPHA) + (prev_short * (1 - self.SHORT_EMA_ALPHA))
-                    trader_state["pepper_long_ema"] = (mid_price * self.LONG_EMA_ALPHA) + (prev_long * (1 - self.LONG_EMA_ALPHA))
+                    mid = (best_bid + best_ask) / 2.0
 
-                short_ema = trader_state["pepper_short_ema"]
-                long_ema = trader_state["pepper_long_ema"]
+                half_spread = 8
+                skew = position   # positive position → shift quotes down; negative → up
 
-                # Momentum Crossover Logic
-                # If short term EMA is above long term EMA, we are in an uptrend -> BUY
-                if short_ema > long_ema:
-                    buy_size = limit - current_position
-                    if buy_size > 0:
-                        # We use a market order (aggressively taking best ask)
-                        orders.append(Order(product, best_ask, buy_size))
-                
-                # If short term EMA drops below long term EMA, downtrend -> SELL
-                elif short_ema < long_ema:
-                    sell_size = -limit - current_position
-                    if sell_size < 0:
-                        # Market order taking best bid
-                        orders.append(Order(product, best_bid, sell_size))
+                our_bid = math.floor(mid - half_spread - skew)
+                our_ask = math.ceil(mid  + half_spread - skew)
+
+                # Quote the full available capacity on each side
+                bid_capacity = limit - position      # max additional units we can buy
+                ask_capacity = limit + position      # max units we can sell (flatten + short)
+
+                if bid_capacity > 0:
+                    orders.append(Order(product, our_bid,  bid_capacity))
+                if ask_capacity > 0:
+                    orders.append(Order(product, our_ask, -ask_capacity))
 
                 result[product] = orders
 
-        # 3. Serialize state for the next iteration
-        traderData = jsonpickle.encode(trader_state)
-        
         return result, conversions, traderData
