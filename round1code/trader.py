@@ -84,7 +84,7 @@ class Trader:
 
                 # Quote size 10: large enough to capture meaningful volume per fill,
                 # small enough that a single fill doesn't exhaust the position limit.
-                quote_size = 10
+                quote_size = 12
                 bid_capacity = min(quote_size, limit - position)
                 ask_capacity = min(quote_size, limit + position)
 
