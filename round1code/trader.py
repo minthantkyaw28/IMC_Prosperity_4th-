@@ -18,8 +18,9 @@ class Trader:
 
     def __init__(self):
         # We define constants for the EMA (Exponential Moving Average) smoothing
-        self.SHORT_EMA_ALPHA = 2 / (5 + 1)   # roughly a 5-period EMA
-        self.LONG_EMA_ALPHA  = 2 / (20 + 1)  # roughly a 20-period EMA
+        # Slowed down significantly to capture macro-trends and avoid 100ms interval noise
+        self.SHORT_EMA_ALPHA = 2 / (1000 + 1)   # roughly a 1000-period EMA (~100 sec)
+        self.LONG_EMA_ALPHA  = 2 / (5000 + 1)  # roughly a 5000-period EMA (~500 sec)
 
     def run(self, state: TradingState):
         """
