@@ -78,7 +78,7 @@ class Trader:
                 # k=0 gave pos=+12 stranded at end (116 XIRECs of unbooked edge).
                 # k=1 gave pos=+2 but killed fill frequency (only 32 real fills vs 187).
                 # k=0.5 keeps high fill activity AND unwinds inventory before session ends.
-                skew = position * 0.4
+                skew = position * 0.35
                 our_bid = math.floor(mid - half_spread - skew)
                 our_ask = math.ceil(mid  + half_spread - skew)
 
